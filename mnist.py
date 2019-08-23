@@ -1,7 +1,7 @@
 """
 PyTorch MNIST
 """
-# pylint: disable=globally-disabled, no-member
+# pylint: disable=no-member
 import argparse
 import os
 import torch
