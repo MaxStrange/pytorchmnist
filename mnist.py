@@ -3,6 +3,7 @@ PyTorch MNIST
 
 Plenty taken from https://github.com/pytorch/examples/blob/master/mnist/main.py
 Some taken from https://github.com/L1aoXingyu/pytorch-beginner/blob/master/08-AutoEncoder
+Some taken from https://github.com/sksq96/pytorch-vae/blob/master/vae.py
 """
 # pylint: disable=no-member
 import argparse
@@ -80,6 +81,71 @@ class MnistAutoEncoderModel(nn.Module):
         x = self.decoder(x)
         return x
 
+class Flatten(nn.Module):
+    def forward(self, x):
+        return x.view(x.size(0), -1)
+
+class Unflatten(nn.Module):
+    def __init__(self, size):
+        super(Unflatten, self).__init__()
+        self.size = size
+
+    def forward(self, x):
+        return x.view(x.size(0), self.size, 1, 1)
+
+class MnistVariationalAutoencoderModel(nn.Module):
+    def __init__(self, device):
+        super(MnistVariationalAutoencoderModel, self).__init__()
+        self.encoder = nn.Sequential(
+            nn.Conv2d(in_channels=1, out_channels=16, kernel_size=3, stride=3, padding=1),
+            nn.LeakyReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(in_channels=16, out_channels=8, kernel_size=3, stride=2, padding=1),
+            nn.LeakyReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=1),
+            nn.BatchNorm2d(num_features=8),
+            Flatten()
+        )
+        self.fc_left = nn.Linear(in_features=32, out_features=20)
+        self.fc_right = nn.Linear(in_features=32, out_features=20)
+        self.collect = nn.Linear(in_features=20, out_features=8*16)
+        self.decoder = nn.Sequential(
+            Unflatten(8*16),
+            nn.ConvTranspose2d(in_channels=128, out_channels=64, kernel_size=2, stride=2),
+            nn.LeakyReLU(),
+            nn.BatchNorm2d(num_features=64),
+            nn.ConvTranspose2d(in_channels=64, out_channels=16, kernel_size=3, stride=2),
+            nn.LeakyReLU(),
+            nn.ConvTranspose2d(in_channels=16, out_channels=8, kernel_size=3, stride=2, padding=1),
+            nn.LeakyReLU(),
+            nn.BatchNorm2d(num_features=8),
+            nn.ConvTranspose2d(in_channels=8, out_channels=1, kernel_size=4, stride=3),
+            nn.Sigmoid()
+        )
+        self.device = device
+
+    def encode(self, x):
+        h = F.leaky_relu(self.encoder(x))
+        return self.fc_left(h), self.fc_right(h)
+
+    def reparameterize(self, mu, logvar):
+        std = logvar.mul(0.5).exp_()
+        if self.device.type.startswith("cuda"):
+            eps = torch.cuda.FloatTensor(std.size()).normal_()
+        else:
+            eps = torch.FloatTensor(std.size()).normal_()
+        eps = torch.autograd.Variable(eps)
+        return eps.mul(std).add_(mu)
+
+    def decode(self, z):
+        h = self.collect(z)
+        return self.decoder(h)
+
+    def forward(self, x):
+        mu, logvariance = self.encode(x)
+        z = self.reparameterize(mu, logvariance)
+        return self.decode(z), mu, logvariance
+
 
 def train(model: nn.Module, device: torch.torch.device, train_loader: torch.utils.data.DataLoader, optimizer: optim.Optimizer, epoch: int):
     """
@@ -137,6 +203,30 @@ def train_autoencoder(model: nn.Module, device: torch.torch.device, train_loader
             print(f"Epoch {epoch}: [{batchidx * len(x)}/{len(train_loader.dataset)}]\tLoss: {loss.item():.6f}", end='\r')
     print("")
 
+def train_vae(model: nn.Module, device: torch.torch.device, train_loader: torch.utils.data.DataLoader, optimizer: optim.Optimizer, epoch: int):
+    """
+    Do a single epoch of training for a variational autoencoder model.
+    """
+    model.train()
+    for batchidx, (x, _) in enumerate(train_loader):
+        # Get the reconstruction, the mu, and the log of the variance
+        recon, mu, logvar = model(x.to(device))
+
+        # Compute the loss values
+        binary_xentropy_loss = F.binary_cross_entropy(recon, x, size_average=False)
+        kl_divergence = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
+        loss = binary_xentropy_loss + kl_divergence
+
+        # Optimize
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        # Maybe print some useful stuff
+        if batchidx % 10 == 0:
+            print(f"Epoch {epoch}: [{batchidx * len(x)}/{len(train_loader.dataset)}]\tLoss: {loss.item():.6f}", end='\r')
+    print("")
+
 def test(model: nn.Module, device: torch.torch.device, test_loader: torch.utils.data.DataLoader):
     """
     Test the MNIST model.
@@ -164,7 +254,7 @@ def test_autoencoder(model: nn.Module, device: torch.torch.device, test_loader: 
         imgs = []
         for x, _ in test_loader:
             x = x.to(device)
-            yhat = model(x)
+            yhat, _mu, _logvar = model(x)
             imgs.append(yhat[0].squeeze())
 
         # Show a bunch of images
@@ -178,6 +268,8 @@ def test_autoencoder(model: nn.Module, device: torch.torch.device, test_loader: 
                 axs[rowidx][colidx].axis('off')
         fig.suptitle("Samples of Autoencoder Values")
         plt.show()
+
+# TODO: Test VAE by sampling from latent space
 
 
 if __name__ == "__main__":
@@ -224,6 +316,8 @@ if __name__ == "__main__":
         model = MnistCnnModel()
     elif args.model == 'autoencoder':
         model = MnistAutoEncoderModel()
+    elif args.model == 'vae':
+        model = MnistVariationalAutoencoderModel(device)
     else:
         raise NotImplementedError(f"{args.model} is not yet implemented. Sorry :(")
 
@@ -238,6 +332,9 @@ if __name__ == "__main__":
         if args.model == 'mlp' or args.model == 'cnn':
             train(model, device, train_loader, optimizer, epoch)
             test(model, device, test_loader)
-        else:
+        elif args.model == 'autoencoder':
             train_autoencoder(model, device, train_loader, optimizer, epoch)
+            test_autoencoder(model, device, test_loader)
+        elif args.model == 'vae':
+            train_vae(model, device, train_loader, optimizer, epoch)
             test_autoencoder(model, device, test_loader)
