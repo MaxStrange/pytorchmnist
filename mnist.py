@@ -59,7 +59,7 @@ def train(model: nn.Module, device: torch.torch.device, train_loader: torch.util
 
         # Maybe print some useful stuff
         if batchidx % 10 == 0:
-            print(f"Epoch {epoch}: [{batchidx * len(x)}/{len(train_loader.dataset)}]\tLoss: {loss.item():.6f}")
+            print(f"Epoch {epoch}: [{batchidx * len(x)}/{len(train_loader.dataset)}]\tLoss: {loss.item():.6f}", end='\r')
 
 def test(model: nn.Module, device: torch.torch.device, test_loader: torch.utils.data.DataLoader):
     """
