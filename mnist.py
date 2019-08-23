@@ -1,6 +1,7 @@
 """
 PyTorch MNIST
 """
+# pylint: disable=globally-disabled, no-member
 import argparse
 import os
 import torch
@@ -8,6 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torchvision.datasets as datasets
+import torchvision.transforms as transforms
 
 
 MNIST_DIMS = (28, 28)
@@ -21,18 +23,18 @@ class MnistMlpModel(nn.Module):
     """
     def __init__(self):
         super(MnistMlpModel, self).__init__()
-        self.fc1 = nn.Linear(MNIST_FLAT_SIZE, 256)
-        self.fc2 = nn.Linear(256, 512)
-        self.fc3 = nn.Linear(512, MNIST_CLASSES)
+        self.fc1 = nn.Linear(MNIST_FLAT_SIZE, 512)
+        self.fc2 = nn.Linear(512, 256)
+        self.fc3 = nn.Linear(256, MNIST_CLASSES)
 
     def forward(self, x):
         x = F.leaky_relu(self.fc1(x))
         x = F.leaky_relu(self.fc2(x))
-        x = F.log_softmax(self.fc3(x))
+        x = F.log_softmax(self.fc3(x), dim=1)
         return x
 
 
-def train(model: nn.Module, device: torch.torch.device, train_loader: torch.utils.data.DataLoader, optimizer: None, epoch: int):
+def train(model: nn.Module, device: torch.torch.device, train_loader: torch.utils.data.DataLoader, optimizer: optim.Optimizer, epoch: int):
     """
     Do a single epoch of training on the model.
     """
@@ -53,11 +55,29 @@ def train(model: nn.Module, device: torch.torch.device, train_loader: torch.util
 
         # Back prop
         loss.backward()
-        optimizer.stop()
+        optimizer.step()
 
         # Maybe print some useful stuff
         if batchidx % 10 == 0:
             print(f"Epoch {epoch}: [{batchidx * len(x)}/{len(train_loader.dataset)}]\tLoss: {loss.item():.6f}")
+
+def test(model: nn.Module, device: torch.torch.device, test_loader: torch.utils.data.DataLoader):
+    """
+    Test the MNIST model.
+    """
+    model.eval()
+    test_loss = 0
+    correct = 0
+    with torch.no_grad():
+        for x, y in test_loader:
+            x = x.to(device)
+            y = y.to(device)
+            yhat = model(x)
+            test_loss += F.nll_loss(yhat, y, reduction='sum').item()  # sum up batch loss
+            pred = yhat.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
+            correct += pred.eq(y.view_as(pred)).sum().item()
+    test_loss /= len(test_loader.dataset)
+    print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(test_loss, correct, len(test_loader.dataset), 100. * correct / len(test_loader.dataset)))
 
 
 if __name__ == "__main__":
@@ -84,8 +104,14 @@ if __name__ == "__main__":
     device = torch.device("cuda" if args.cuda and torch.cuda.is_available() else "cpu")
 
     # Download MNIST dataset
-    mnist_train = datasets.MNIST(os.path.abspath(args.data_dir), train=True, download=True)
-    mnist_test = datasets.MNIST(os.path.abspath(args.data_dir), train=False, download=True)
+    transformations = [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
+    if args.model == 'mlp':
+        # Need to flatten input
+        transformations.append(transforms.Lambda(lambda x: x.view(-1)))
+    train_transform = transforms.Compose(transformations)
+    test_transform = transforms.Compose(list(transformations))
+    mnist_train = datasets.MNIST(os.path.abspath(args.data_dir), train=True, download=True, transform=train_transform)
+    mnist_test = datasets.MNIST(os.path.abspath(args.data_dir), train=False, download=True, transform=test_transform)
 
     # Set up the data loaders
     train_loader = torch.utils.data.DataLoader(mnist_train, batch_size=args.batch_size, shuffle=True)
@@ -106,4 +132,4 @@ if __name__ == "__main__":
     # Train the model; test after every epoch
     for epoch in range(1, args.n_epochs + 1):
         train(model, device, train_loader, optimizer, epoch)
-        test(model)
+        test(model, device, test_loader)
